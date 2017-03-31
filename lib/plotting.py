@@ -53,7 +53,7 @@ def plot_value_function(V, title="Value Function"):
         ax.set_title(title)
         ax.view_init(ax.elev, -120)
         fig.colorbar(surf)
-        plt.show()
+        plt.savefig(title, orientation='landscape')
 
     plot_surface(X, Y, Z_noace, "{} (No Usable Ace)".format(title))
     plot_surface(X, Y, Z_ace, "{} (Usable Ace)".format(title))
