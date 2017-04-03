@@ -22,7 +22,7 @@ def plot_cost_to_go_mountain_car(env, estimator, num_tiles=20):
     ax.set_zlabel('Value')
     ax.set_title("Mountain \"Cost To Go\" Function")
     fig.colorbar(surf)
-    plt.show()
+    plt.savefig("Mountain \"Cost To Go\" Function", orientation='landscape')
 
 
 def plot_value_function(V, title="Value Function"):
@@ -58,19 +58,15 @@ def plot_value_function(V, title="Value Function"):
     plot_surface(X, Y, Z_noace, "{} (No Usable Ace)".format(title))
     plot_surface(X, Y, Z_ace, "{} (Usable Ace)".format(title))
 
-
-
 def plot_episode_stats(stats, smoothing_window=10, noshow=False):
     # Plot the episode length over time
     fig1 = plt.figure(figsize=(10,5))
     plt.plot(stats.episode_lengths)
     plt.xlabel("Episode")
     plt.ylabel("Episode Length")
-    plt.title("Episode Length over Time")
-    if noshow:
-        plt.close(fig1)
-    else:
-        plt.show(fig1)
+    title = "Episode Length over Time"
+    plt.title(title)
+    plt.savefig(title, orientation='landscape')
 
     # Plot the episode reward over time
     fig2 = plt.figure(figsize=(10,5))
@@ -78,21 +74,17 @@ def plot_episode_stats(stats, smoothing_window=10, noshow=False):
     plt.plot(rewards_smoothed)
     plt.xlabel("Episode")
     plt.ylabel("Episode Reward (Smoothed)")
-    plt.title("Episode Reward over Time (Smoothed over window size {})".format(smoothing_window))
-    if noshow:
-        plt.close(fig2)
-    else:
-        plt.show(fig2)
+    title = "Episode Reward over Time (Smoothed over window size {})".format(smoothing_window)
+    plt.title(title)
+    plt.savefig(title, orientation='landscape')
 
     # Plot time steps and episode number
     fig3 = plt.figure(figsize=(10,5))
     plt.plot(np.cumsum(stats.episode_lengths), np.arange(len(stats.episode_lengths)))
     plt.xlabel("Time Steps")
     plt.ylabel("Episode")
-    plt.title("Episode per time step")
-    if noshow:
-        plt.close(fig3)
-    else:
-        plt.show(fig3)
+    title = "Episode per time step"
+    plt.title(title)
+    plt.savefig(title, orientation='landscape')
 
     return fig1, fig2, fig3
