@@ -23,9 +23,8 @@ def make_epsilon_greedy_policy(Q, epsilon, nA):
     def policy_fn(observation):
         A = np.ones(nA, dtype=float) * epsilon / nA
         best_action = np.argmax(Q[observation])
-        A[best_action] += (1.0 - epsilon)
-        action = np.random.choice(np.arange(0,nA), p=A)
-        return action
+        A[best_action] += (1.0 - epsilon) 
+        return A
         
     return policy_fn
 
@@ -66,7 +65,8 @@ def mc_control_epsilon_greedy(env, num_episodes, discount_factor=1.0, epsilon=0.
             episode_tracker = []
 
             while True:
-                action = policy(observation)
+                probs = policy(observation) 
+                action = np.random.choice(np.arange(0,env.action_space.n), p=probs)
                 observation_new, reward, done, _ = env.step(action)
                 episode_tracker.append((observation, action, reward))
                 
