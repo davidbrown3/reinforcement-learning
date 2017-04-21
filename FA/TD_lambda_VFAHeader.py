@@ -2,7 +2,7 @@ import matplotlib
 import gym
 import pickle
 
-from TD_lambda_VFA import Estimator, TD_lambda
+from TD_lambda_VFA import Estimator, TD_lambda, experiment
 
 import os
 import sys
@@ -18,17 +18,18 @@ test = "MountainCar-v0"
 
 env = gym.envs.make(test)
 
-loadmodel = True
+loadmodel = False
 
 if loadmodel:
     weights = pickle.load( open( "savedmodel.txt", "rb" ) )
     estimator = Estimator(env, weights)
-    stats, estimator = TD_lambda(env, estimator, 2000, EpsilonFunction.ZeroEpsilonFunction, display=False, alpha=1e-4)
+    # stats, estimator = TD_lambda(env, estimator, 10000, EpsilonFunction.ZeroEpsilonFunction, display=True, alpha=1e-5)
 
 else:
     weights = None
     estimator = Estimator(env, weights)
-    stats, estimator = TD_lambda(env, estimator, 2000, EpsilonFunction.DecayEpsilonFunction, display=False, alpha=1e-3)
+    experiment(env, estimator)
+    # stats, estimator = TD_lambda(env, estimator, 10000, EpsilonFunction.DecayEpsilonFunction, display=False, alpha=1e-3)
 
 weights = estimator.weights
 pickle.dump(weights, open( "savedmodel.txt", "wb" ) )
