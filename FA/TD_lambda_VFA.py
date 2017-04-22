@@ -7,6 +7,8 @@ import numpy as np
 import click
 import time
 
+from collections import deque
+
 sys.path.append(os.path.dirname(sys.path[0]))
 from lib import plotting, EpsilonFunction
 from lib.tilecoding import representation
@@ -30,10 +32,12 @@ class Estimator():
         
         self.featurizer = representation.TileCoding(
             input_indices = [np.arange(self.state_length)], # Tiling in each dimension
-            ntiles = [50], # Number of tiles per dimension
-            ntilings = [1], # How many layers of tiles
+            ntiles = [10], # Number of tiles per dimension
+            ntilings = [3], # How many layers of tiles
             hashing = None,
             state_range = state_range)
+        
+        # MORE TILING: share weights for neibouring states. Less to learn
 
         # After choice of feature type
         self.feature_length = self.featurizer._TileCoding__size
@@ -90,7 +94,8 @@ class Estimator():
         self.weights += update
         return update
 
-    def update_LSDQ(self, experience, discount_factor, count):
+    # Needs renaming to LSQ
+    def update_LSDQ(self, experience, discount_factor, count, dynamic_experience=False):
         """
         Updates the estimator parameters for a given state and action towards
         the target y.
@@ -98,112 +103,51 @@ class Estimator():
 
         # Initialise policy for current time
         epsilon = 0.0
+        full_length = self.feature_length * self.action_length
 
-        min_experience = 2
-        if len(experience) > min_experience:
-            for idx, (observation, action, reward, observation_new) in enumerate(experience):
-                
-                print(idx)
-
+        with click.progressbar(range(len(experience))) as bar:
+            for idx in bar:
+                (observation, action, reward, observation_new) = experience[idx]
+            
                 probs_old = self.policy(observation_new, epsilon=epsilon, weights=self.weights_old)
                 probs = self.policy(observation_new, epsilon=epsilon, weights=self.weights)
 
                 action_policy_old = np.argmax(probs_old)
                 action_policy_new = np.argmax(probs)
 
-                if count==0:
-                    
-                    full_length = self.feature_length * self.action_length
-
-                    '''
-                    x_SA = np.zeros((self.feature_length, self.action_length))
-                    x_SA_new = np.zeros((self.feature_length, self.action_length))
-
-                    x_SA[:,action] = self.featurize_state(
-                        observation)[0].reshape((self.feature_length,1)).flatten()
-                    x_SA = x_SA.reshape(full_length,1,order='F')
-
-                    x_SA_new[:, action_policy_new] = self.featurize_state(
-                        observation_new)[0].reshape((self.feature_length, 1)).flatten()
-                    x_SA_new = x_SA_new.reshape(full_length,1,order='F')
-
-                    update = np.empty(self.a_tracker.shape)
-                    b = (x_SA - discount_factor*x_SA_new)
-                    np.outer(x_SA, b, update)
-                    self.a_tracker += update
-                    self.b_tracker += x_SA * reward
-                    '''
-                    # Faster matrix multiplication for known sparse outer product
-                    t = time.time()
-
-                    x_SA = self.featurize_state(
-                        observation)[0].reshape((self.feature_length,1)).flatten()
-                    x_SA_new_add = self.featurize_state(
-                        observation_new)[0].reshape((self.feature_length, 1)).flatten()
-                    x_SA_new_subtract = self.featurize_state(
-                        observation_new)[0].reshape((self.feature_length, 1)).flatten()
-                    
-                    update_add = np.zeros((self.feature_length,self.feature_length))
-                    np.outer(x_SA, (x_SA - discount_factor*x_SA_new_add), update_add)
-
-                    idx = action * self.feature_length
-                    idx_add = action_policy_new * self.feature_length
+                if (action_policy_new == action_policy_old) & count>0:
+                    continue
                 
+                # Faster matrix multiplication for known sparse outer product
+                _, x_SA_IX = self.featurize_state(observation)
+                x_SA_IX_full = x_SA_IX + action*self.feature_length
+
+                _, x_SA_new_IX = self.featurize_state(observation_new)
+                x_SA_new_add_IX_full = x_SA_new_IX + action_policy_new*self.feature_length
+                x_SA_new_subtract_IX_full = x_SA_new_IX + action_policy_old*self.feature_length
+                
+                update_add = np.zeros((full_length, full_length))
+                update_subtract = np.zeros((full_length, full_length))
+                
+                if (count == 0) | dynamic_experience:
+                    
+                    # Outer product complexity is not requred for tile coding
+                    self.a_tracker[x_SA_IX_full, x_SA_IX_full] += 1 # Assumes tiles come out as 1 each
+                    self.a_tracker[x_SA_IX_full, x_SA_new_add_IX_full] -= discount_factor # Assumes tiles come out as 1 each
+                    
+                    idx = action * self.feature_length
                     update_b = self.featurize_state(
                         observation)[0].reshape((self.feature_length,1)).flatten()
 
-                    #self.a_tracker += update_add_full
-                    self.a_tracker[idx:idx+self.feature_length, 
-                        idx_add:idx_add+self.feature_length] += update_add
                     self.b_tracker[idx:idx+self.feature_length, 0] += update_b * reward
                     
-                    elapsed = time.time() - t
-                    #print(elapsed)
-
                 elif (action_policy_new != action_policy_old):
 
-                    full_length = self.feature_length * self.action_length
-
-                    '''
-                    x_SA = np.zeros((self.feature_length, self.action_length))
-                    x_SA_new_add = np.zeros((self.feature_length, self.action_length))
-                    x_SA_new_subtract = np.zeros((self.feature_length, self.action_length))
-
-                    x_SA[:,action] = self.featurize_state(
-                        observation)[0].reshape((self.feature_length,1)).flatten()
-                    x_SA = x_SA.reshape(full_length,1,order='F')
-
-                    x_SA_new_add[:, action_policy_new] = self.featurize_state(
-                        observation_new)[0].reshape((self.feature_length, 1)).flatten()
-                    x_SA_new_add = x_SA_new_add.reshape(full_length,1,order='F')
-
-                    x_SA_new_subtract[:, action_policy_old] = self.featurize_state(
-                        observation_new)[0].reshape((self.feature_length, 1)).flatten()
-                    x_SA_new_subtract = x_SA_new_subtract.reshape(full_length,1,order='F')
-                    '''
-                    # Faster matrix multiplication for known sparse outer product
-                    x_SA = self.featurize_state(
-                        observation)[0].reshape((self.feature_length,1)).flatten()
-                    x_SA_new_add = self.featurize_state(
-                        observation_new)[0].reshape((self.feature_length, 1)).flatten()
-                    x_SA_new_subtract = self.featurize_state(
-                        observation_new)[0].reshape((self.feature_length, 1)).flatten()
-                    
-                    update_add = np.zeros((self.feature_length,self.feature_length))
-                    update_subtract = np.zeros((self.feature_length,self.feature_length))
-
-                    np.outer(x_SA, (x_SA - discount_factor*x_SA_new_add), update_add)
-                    np.outer(x_SA, (x_SA - discount_factor*x_SA_new_subtract), update_subtract)
-
-                    idx = action * self.feature_length
-                    idx_add = action_policy_new * self.feature_length
-                    idx_subtract = action_policy_old * self.feature_length
-
-                    self.a_tracker[idx:idx+self.feature_length,
-                        idx_add:idx_add+self.feature_length] += update_add
-                    self.a_tracker[idx:idx+self.feature_length,
-                        idx_subtract:idx_subtract+self.feature_length] -= update_subtract
-        
+                    # Outer product complexity is not requred for tile coding
+                    # Don't need to operate on diagonals as they cancel out
+                    self.a_tracker[x_SA_IX_full,x_SA_new_add_IX_full] -= discount_factor # Assumes tiles come out as 1 each
+                    self.a_tracker[x_SA_IX_full,x_SA_new_subtract_IX_full] += discount_factor
+            
         self.weights_old = self.weights
 
         # Efficient to solution to inv(A)*B
@@ -219,59 +163,103 @@ class Estimator():
         A[best_action] += (1.0 - epsilon)
         return A
 
-def experiment(env, estimator, discount_factor=0.9999):
+# Needs renaming to LSPI
+def experiment(env, estimator, discount_factor=0.99):
 
-    samplerange = 2500
+    reward_end = 0
+    samplerange = 50000
     plotrange = 50
+    dynamic_experience = False # Training data changes throughout
+
     samples = np.empty(shape=(samplerange, estimator.state_length))
     plots = np.empty(shape=(plotrange, estimator.state_length))
     plots = []
     for ix, (low, high) in enumerate(zip(env.observation_space.low,env.observation_space.high)):
         plots.append(np.linspace(low, high, num=50).tolist())
         samples[:,ix] = np.random.uniform(low=low, high=high, size=samplerange)
-
-    experience = []
+    
+    experience = deque(maxlen=samplerange)
+    
+    # Training data from sweep of random single steps
     for ix in range(samplerange):
         env.reset()
         env.env.state = samples[ix,:]
         action = env.action_space.sample()
         observation, reward, done, info = env.step(action)
         if done:
-            reward = 1 # Can try an alternative reward if episode is done
+            reward = reward_end # Can try an alternative reward if episode is done
         experience.append((samples[ix,:],action,reward,observation))
-    
+    '''
+
+    # Training data from random policy
+    observation = env.reset()
+    for ix in range(samplerange):
+        action = env.action_space.sample()
+        observation_new, reward, done, info = env.step(action)
+        experience.append((observation, action, reward, observation_new))
+        if done:
+            observation = env.reset()
+        else:
+            observation = observation_new
+    '''
     X, Y = np.meshgrid(*plots)
     XY_combos = np.array([X, Y]).T.reshape(-1, estimator.state_length)
     
-    for count in range(50):
-    
-        estimator.update_LSDQ(experience, discount_factor, count)
-        Z = np.zeros(XY_combos.shape[0])
-        for Idx, state in enumerate(XY_combos):
-            Z[Idx] = np.max(estimator.predict(state, estimator.weights))
-        Z = Z.reshape(X.shape)
+    for count in range(100):
+        
+        estimator.update_LSDQ(experience, discount_factor, count,
+            dynamic_experience=dynamic_experience)
 
-        fig = plt.figure(figsize=(10,5))
-        ax = fig.add_subplot(111, projection='3d')
-        surf = ax.plot_surface(X, Y, Z, cmap=matplotlib.cm.coolwarm)
-        fig.colorbar(surf)
-        ax.view_init(ax.elev, -120)
-        plt.savefig('Test'+str(count), orientation='landscape')
-        plt.close(fig)
+        if (count%1)==0:
+            Z = np.zeros(XY_combos.shape[0])
+            A = np.zeros(XY_combos.shape[0], dtype=int)
+            for Idx, state in enumerate(XY_combos):
+                values = estimator.predict(state, estimator.weights)
+                A[Idx] = np.argmax(values)
+                Z[Idx] = values[A[Idx]]
+            Z = Z.reshape(X.shape)
+            A = A.reshape(X.shape)
+
+            fig = plt.figure(figsize=(10,5))
+            ax = fig.add_subplot(111, projection='3d')
+            surf = ax.plot_surface(X, Y, Z, cmap=matplotlib.cm.coolwarm)
+            fig.colorbar(surf)
+            ax.view_init(ax.elev, -120)
+            plt.savefig('Value'+str(count), orientation='landscape')
+            plt.close(fig)
+
+            fig = plt.figure(figsize=(10,5))
+            ax = fig.add_subplot(111, projection='3d')
+            surf = ax.plot_surface(X, Y, A, cmap=matplotlib.cm.coolwarm)
+            fig.colorbar(surf)
+            ax.view_init(ax.elev, -120)
+            plt.savefig('Action'+str(count), orientation='landscape')
+            plt.close(fig)
 
         observation = env.reset()
         rewards = 0
+        steps = 0
         while True:
-            env.render()
+            steps += 1
+            #env.render()
             feature, feature_index = estimator.featurize_state(observation)
             actions = np.arange(0, env.action_space.n)
             probs = estimator.policy(observation, weights=estimator.weights, epsilon=0)
             action = np.random.choice(actions, p=probs)
-            observation, reward, done, _ = env.step(action)
+            observation_new, reward, done, _ = env.step(action)
             rewards += reward
-            if done:
+            observation = observation_new
+            if done & (steps<env._max_episode_steps):
+                reward = reward_end
+                #experience.append((observation, action, reward, observation_new))
                 print(rewards)
                 break
+            elif done:
+                print(rewards)
+                break
+            else:
+                #experience.append((observation, action, reward, observation_new))
+                1
 
 def TD_lambda(env, estimator, num_episodes, epsilon_func, display=True, discount_factor=0.9,
         epsilon_decay=0.99, epsilon_initial=0.25, visual_updates=10, llambda=0.8, alpha=1e-3,
@@ -344,7 +332,7 @@ def TD_lambda(env, estimator, num_episodes, epsilon_func, display=True, discount
                 eligibility[:,action] += feature.T.flatten()
 
                 # Update weights                    
-                # update = estimator.update(eligibility, td_error, alpha, update, momentum)
+                update = estimator.update(eligibility, td_error, alpha, update, momentum)
 
                 observation = observation_new
 
