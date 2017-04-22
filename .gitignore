@@ -89,7 +89,9 @@ ENV/
 # Rope project settings
 .ropeproject
 
-
 ### IPythonNotebook ###
 # Temporary data
 .ipynb_checkpoints/
+
+#%% Saved plots
+*.png
