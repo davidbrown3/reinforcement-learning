@@ -2,14 +2,13 @@ import matplotlib
 import gym
 import pickle
 
-from TD_lambda_VFA import Estimator, TD_lambda, experiment
-
 import os
 import sys
 
 sys.path.append(os.path.dirname(sys.path[0]))
 from lib import plotting
 from lib import EpsilonFunction
+from lib.RL_Library import ValueEstimator, TD_lambda, LSPI
 
 matplotlib.style.use('ggplot')
 
@@ -22,13 +21,13 @@ loadmodel = False
 
 if loadmodel:
     weights = pickle.load( open( "savedmodel.txt", "rb" ) )
-    estimator = Estimator(env, weights)
+    estimator = LSPI(env, weights)
     # stats, estimator = TD_lambda(env, estimator, 10000, EpsilonFunction.ZeroEpsilonFunction, display=True, alpha=1e-5)
 
 else:
     weights = None
-    estimator = Estimator(env, weights)
-    experiment(env, estimator)
+    estimator = ValueEstimator(env, weights)
+    estimator = LSPI(env, estimator)
     # stats, estimator = TD_lambda(env, estimator, 10000, EpsilonFunction.DecayEpsilonFunction, display=False, alpha=1e-3)
 
 weights = estimator.weights
