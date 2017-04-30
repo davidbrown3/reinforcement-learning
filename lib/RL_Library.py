@@ -17,85 +17,11 @@ from lib.tilecoding import representation
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
-class PolicyEstimator():
-    """
-    Policy Function approximator.
-    """
-    def __init__(self, env, weights, state_labels):
-        # We create a separate model for each action in the environment's
-        # action space. Alternatively we could somehow encode the action
-        # into the features, but this way it's easier to code up.
-        
-        self.state_labels = state_labels
-        self.action_length = 1
-
-        state_range = [
-            np.array(env.observation_space.low), 
-            np.array(env.observation_space.high)]
-
-        self.state_length = env.observation_space.shape[0]
-        self.NTiling = 10
-        self.featurizer = representation.TileCoding(
-            input_indices = [np.arange(self.state_length)], # Tiling in each dimension
-            ntiles = [10], # Number of tiles per dimension
-            ntilings = [self.NTiling], # How many layers of tiles
-            hashing = None,
-            state_range = state_range)
-
-        # After choice of feature type
-        self.feature_length = self.featurizer._TileCoding__size
-
-        self.weights = np.random.uniform(
-            low=env.action_space.low, high=env.action_space.high,
-            size=[self.feature_length, self.action_length])/(self.NTiling)
-
-    def featurize_state(self, state):
-        """
-        Returns the featurized representation for a state.
-        """
-        ## polynomial features function requires 2D matrix
-        # features = self.poly.fit_transform(state.reshape(1, -1))
-        features = np.zeros((self.feature_length,1))
-        features_index = self.featurizer(state)[0:-1]
-        features[features_index] = 1
-        return features, features_index
-    
-    def predict(self, state, weights):
-        """
-        Makes value function predictions.
-        Args:
-            s: state to make a prediction for
-            a: (Optional) action to make a prediction for
-        Returns
-            If an action a is given this returns a single number as the prediction.
-            If no action is given this returns a vector or predictions for all actions
-            in the environment where pred[i] is the prediction for action i.
-        """
-        
-        #1: Featurise states & action
-        features, _ = self.featurize_state(state)
-        #2: Calculate action-value
-        mean = np.matmul(features.T, weights).flatten()
-        
-        return mean
-
-
-    def update(self, eligibility, alpha, value_td_error, update_prev, momentum):
-        """
-        Updates the estimator parameters for a given state and action towards
-        the target y.
-        """
-        
-        update = np.array(alpha * eligibility * value_td_error).reshape(-1,1) + momentum * update_prev
-        self.weights += update
-
-        return update
-
-class ValueEstimator():
+class TileCodeEstimator():
     """
     Action-Value Function approximator.
     """
-    def __init__(self, env, weights, state_labels):
+    def __init__(self, env, weights, state_labels, NLayers=5, NTiles=10):
         # We create a separate model for each action in the environment's
         # action space. Alternatively we could somehow encode the action
         # into the features, but this way it's easier to code up.
@@ -112,10 +38,10 @@ class ValueEstimator():
             np.array(env.observation_space.low), 
             np.array(env.observation_space.high)]
         
-        self.NTiling = 5
+        self.NTiling = NLayers
         self.featurizer = representation.TileCoding(
             input_indices = [np.arange(self.state_length)], # Tiling in each dimension
-            ntiles = [10], # Number of tiles per dimension
+            ntiles = [NTiles], # Number of tiles per dimension
             ntilings = [self.NTiling], # How many layers of tiles
             hashing = None,
             state_range = state_range)
@@ -169,12 +95,12 @@ class ValueEstimator():
         #3: Select return
         return value
 
-    def update(self, eligibility, td_error, alpha, update_prev, momentum):
+    def update_SGD(self, eligibility, td_error, alpha, update_prev, momentum):
         """
         Updates the estimator parameters for a given state and action towards
         the target y.
         """
-        update = alpha * td_error * eligibility + momentum * update_prev
+        update =  np.array(alpha * td_error * eligibility).reshape(-1,1) + momentum * update_prev
         self.weights += update
         return update
     
@@ -357,8 +283,9 @@ def PlotAction(env, estimator, count=0):
     plt.savefig('AC_Action'+str(count), orientation='landscape')
     plt.close(fig)    
 
-def PlotPC(env, estimator, count=0, label = ''):
+def PlotPC(env, estimators, count=0, sample_scalars=1, labels = ['']):
     
+    '''
     plots = []
     for ix, (low, high) in enumerate(zip(env.observation_space.low,env.observation_space.high)):
         plots.append(np.linspace(low, high, num=20).tolist())
@@ -369,35 +296,46 @@ def PlotPC(env, estimator, count=0, label = ''):
     V = np.zeros(combos.shape[0])
     for combo_ix, combo in enumerate(combos):
         V[combo_ix] = estimator.predict(combo, estimator.weights)
+    '''
 
-    mins = np.min(combos, 0)
-    maxs = np.max(combos, 0)
     data = []
+
+    num = 5000
+    combos = np.zeros((num, estimators[0].state_length))
+    for ix in range(num):
+         combos[ix,:] = env.reset()*sample_scalars
     
-    for state_ix in range(estimator.state_length):
-            data.append(
-                dict(
-                    range = [mins[state_ix], maxs[state_ix]], 
-                    label = estimator.state_labels[state_ix],
-                    values = combos[:, state_ix]
-                    )
-                ) 
+    V = np.zeros((combos.shape[0], len(estimators)))
+    for est_ix, estimator in enumerate(estimators):
+        for combo_ix, combo in enumerate(combos):
+            V[combo_ix, est_ix] = estimator.predict(combo, estimator.weights)
+        data.append(dict(range = [np.min(V[:, est_ix]), np.max(V[:, est_ix])], label = labels[est_ix], values = V[:, est_ix]))
+
+    mins = env.observation_space.low
+    maxs = env.observation_space.high
     
-    data.append(dict(range = [np.min(V), np.max(V)], label = label, values = V))
+    for state_ix in range(estimators[0].state_length):
+        data.append(
+            dict(
+                range = [mins[state_ix], maxs[state_ix]], 
+                label = estimators[0].state_labels[state_ix],
+                values = combos[:, state_ix]
+                )
+            )         
 
     PCdata = [
         go.Parcoords(
-            line = dict(color = V,
+            line = dict(color = V[:,0],
                    colorscale = 'Portland',
                    showscale = True,
                    reversescale = True,
-                   cmin = np.min(V),
-                   cmax = np.max(V)),
+                   cmin = np.min(V[:,0]),
+                   cmax = np.max(V[:,0])),
             dimensions = data
         )
     ]
 
-    py.plot(PCdata, filename = 'PC' + label + '_' + str(count) + '.html')
+    py.plot(PCdata, filename = 'PC' + labels[0] + '_' + str(count) + '.html')
 
 def PlotValue(env, estimator, count=0):
 
@@ -442,19 +380,6 @@ def LSPI(env, estimator, discount_factor=0.99):
     
     dynamic_experience = False # Training data changes throughout
     experience = SampledExperience(env, estimator, samplerange)
-    
-    '''
-    # Training data from random policy
-    observation = env.reset()
-    for ix in range(samplerange):
-        action = env.action_space.sample()
-        observation_new, reward, done, info = env.step(action)
-        experience.append((observation, action, reward, observation_new))
-        if done:
-            observation = env.reset()
-        else:
-            observation = observation_new
-    '''
 
     for episode in range(100):
         
@@ -488,12 +413,24 @@ def LSPI(env, estimator, discount_factor=0.99):
                 #experience.append((observation, action, reward, observation_new))
                 1
 
-def ActorCritic(env, policy_estimator, value_estimator, num_episodes, display=True,
+def D_AC_OffP_PG(env, policy_estimator, value_estimator, num_episodes):
+    '''
+    Deterministic Off Policy Actor Critic Policy Gradient
+    '''
+    1
+    #for episode in range(num_episodes):
+        #while True:
+         #   1
+
+def Stoc_AC_OnP_PG(env, policy_estimator, value_estimator, num_episodes, display=True,
         epsilon_decay=0.99, epsilon_initial=0.25, visual_updates=1, policy_std=10**-1,
         value_alpha=1e-3,  value_discount_factor=0.99,  value_llambda=0, value_momentum=0,
         policy_alpha=1e-3, policy_discount_factor=0.99, policy_llambda=0, policy_momentum=0,
-        samplerange=5000, samplemethod='PolicySampledExperience', plot_updates=1):
-    
+        samplerange=5000, samplemethod='PolicySampledExperience', plot_updates=1, explore_off=10,
+        sample_scalars=1):
+    '''
+    Stochastic On Policy Actor Critic Policy Gradient
+    '''
     env.reset()
     true_state_length = len(env.env.state)
 
@@ -504,7 +441,7 @@ def ActorCritic(env, policy_estimator, value_estimator, num_episodes, display=Tr
     elif samplemethod is 'PolicyRandomExperience':
         true_samples = np.empty(shape=(samplerange, true_state_length))
         for ix in range(samplerange):
-            samples[ix,:] = env.reset()
+            samples[ix,:] = env.reset()*sample_scalars
             true_samples[ix,:] = env.env.state
 
     dynamic_experience = False # Training data changes throughout
@@ -529,8 +466,7 @@ def ActorCritic(env, policy_estimator, value_estimator, num_episodes, display=Tr
                 PlotValue(env, value_estimator, episode)
                 PlotAction(env, policy_estimator, episode)
             else:
-                PlotPC(env, value_estimator, episode, 'Value')
-                PlotPC(env, policy_estimator, episode, 'Policy')
+                PlotPC(env, [value_estimator, policy_estimator], episode, sample_scalars, ['Value', 'Policy'])
 
         episode_tracker = []
         value_eligibility = np.zeros(value_estimator.feature_length)
@@ -548,7 +484,11 @@ def ActorCritic(env, policy_estimator, value_estimator, num_episodes, display=Tr
             policy_feature, _ = policy_estimator.featurize_state(observation)
 
             mean_action = policy_estimator.predict(observation, policy_estimator.weights)
-            action = np.random.normal(loc=mean_action, scale=policy_std)
+            
+            if (episode%explore_off == 0) & episode>0:
+                action = mean_action
+            else:
+                action = np.random.normal(loc=mean_action, scale=policy_std)
 
             policy_score = ((action-mean_action) * policy_feature / (policy_std**2)).flatten() # See DSilver notes
 
@@ -574,27 +514,21 @@ def ActorCritic(env, policy_estimator, value_estimator, num_episodes, display=Tr
             # print(str(value_td_error) + '-' + str(reward) + '-' + str(action))
             
             # Eligibility decay
-            ''' 
-            NOTE: TD LAMBDA score is outdated by length of the episode at this point!
-            This is why policy rate must be much slower - so value estimate is pretty up to date
-            -- also stochasticness can cause issue?
-            '''
-
             value_eligibility = value_discount_factor * value_llambda * value_eligibility
             value_eligibility += value_feature.T.flatten()/value_estimator.NTiling
             policy_eligibility = policy_llambda * policy_eligibility
             policy_eligibility += policy_score.flatten()
+            
             # Update weights                    
             '''
             value_update = value_estimator.update(
                 value_eligibility, value_td_error, value_alpha, value_update, value_momentum)
             '''
-
-            policy_update = policy_estimator.update(
+            policy_update = policy_estimator.update_SGD(
                 policy_eligibility, policy_alpha, value_td_error, policy_update, policy_momentum)
             
             if done:
-                print(rewards)
+                print(str(episode) + ' - ' + str(rewards))
                 break
 
             # Loop back parameters
@@ -673,7 +607,7 @@ def TD_lambda(env, estimator, num_episodes, epsilon_func, display=True, discount
                 eligibility[:,action] += feature.T.flatten()
 
                 # Update weights                    
-                update = estimator.update(eligibility, td_error, alpha, update, momentum)
+                update = estimator.update_SGD(eligibility, td_error, alpha, update, momentum)
 
                 observation = observation_new
 
