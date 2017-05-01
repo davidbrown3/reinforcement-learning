@@ -122,7 +122,7 @@ class TileCodeEstimator():
         #2: Calculate action-value
         mean = np.matmul(features.T, weights).flatten()
         chosen = np.random.normal(loc=mean, scale=std)
-        policy_score = ((action-mean_action) * features / (std**2)).flatten() # See DSilver notes
+        policy_score = ((chosen-mean) * features / (std**2)).flatten() # See DSilver notes
         #3: Select return
         return mean, chosen, policy_score
 
@@ -386,7 +386,7 @@ def PlotValue(env, estimator, count=0):
     plt.savefig('Action'+str(count), orientation='landscape')
     plt.close(fig)
 
-def SampleGenerator(env, samplemethod, samplerange):
+def SampleGenerator(env, samplemethod, samplerange, sample_scalars=1):
     
     env.reset()
     true_state_length = len(env.env.state)
@@ -525,12 +525,12 @@ def Stoc_AC_OnP_PG(env, policy_estimator, value_estimator, num_episodes, display
     Stochastic On Policy Actor Critic Policy Gradient
     '''
 
-    observed_samples, true_samples = SampleGenerator(env, samplemethod, samplerange)
+    observed_samples, true_samples = SampleGenerator(env, samplemethod, samplerange, sample_scalars)
     
     for episode in range(num_episodes):
    
         experience = PolicyExperience(env, policy_estimator, 
-            samples, true_samples, policy_std=policy_std) 
+            observed_samples, true_samples, policy_std=policy_std) 
 
         value_estimator.update_LSTD(env,
             experience, value_discount_factor, dynamic_experience=dynamic_experience)
@@ -556,7 +556,7 @@ def Stoc_AC_OnP_PG(env, policy_estimator, value_estimator, num_episodes, display
 
             if (episode%visual_updates == 0) & display: env.render()
 
-            mean_action, action, policy_score = predict_Gaussian(observation, policy_estimator.weights, policy_std)
+            mean_action, action, policy_score = policy_estimator.predict_Gaussian(observation, policy_estimator.weights, policy_std)
             observation_new, reward, done, info = env.step(action)
             rewards += reward
 
