@@ -21,7 +21,7 @@ env = gym.envs.make(test)
 
 weights = None
 estimator = TileCodeEstimator(env, weights, state_labels, NLayers=NLayers, NTiles=NTiles)
-stats, estimator = TD_lambda(env, estimator, 10000, EpsilonFunction.DecayEpsilonFunction, display=False, alpha=1e-3)
+estimator = LSPI(env, estimator)
 
 weights = estimator.weights
 pickle.dump(weights, open( "savedmodel.txt", "wb" ) )
