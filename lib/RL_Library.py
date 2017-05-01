@@ -10,12 +10,34 @@ import plotly.offline as py
 import plotly.graph_objs as go
 
 from collections import deque
+from operator import itemgetter 
 
 sys.path.append(os.path.dirname(sys.path[0]))
 from lib import plotting, EpsilonFunction
 from lib.tilecoding import representation
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+
+class AdvantageEstimator():
+    def __init__(self, env, weights, policy_feature_length):
+        try:
+            self.action_length = env.action_space.n
+        except:
+            self.action_length = 1
+
+        self.weights = np.random.randn(policy_feature_length, self.action_length)
+
+    def featurize_state(self, state, policy_feature, action, mean_action):
+        # For a linear policy, dPolicy/dWeights = the features
+        feature = policy_feature*(action-mean_action)
+        return feature
+    def update_SGD(self, feature, td_error, alpha, update_prev=0, momentum=0):
+        update =  np.array(alpha * td_error * feature).reshape(-1,1) + momentum * update_prev
+        self.weights += update
+        return update
+    def predict(self, feature, weights):
+        value = np.matmul(feature.T, weights).flatten()
+        return value
 
 class TileCodeEstimator():
     """
@@ -54,7 +76,7 @@ class TileCodeEstimator():
         if weights is not None:
             self.weights = weights
         else:
-            self.weights = np.random.rand(self.feature_length, self.action_length)
+            self.weights = np.random.randn(self.feature_length, self.action_length)
         
         self.weights_old = self.weights
 
@@ -94,8 +116,17 @@ class TileCodeEstimator():
         value = np.matmul(features.T, weights).flatten()
         #3: Select return
         return value
+    def predict_Gaussian(self, state, weights, std):
+        #1: Featurise states & action
+        features, _ = self.featurize_state(state)
+        #2: Calculate action-value
+        mean = np.matmul(features.T, weights).flatten()
+        chosen = np.random.normal(loc=mean, scale=std)
+        policy_score = ((action-mean_action) * features / (std**2)).flatten() # See DSilver notes
+        #3: Select return
+        return mean, chosen, policy_score
 
-    def update_SGD(self, eligibility, td_error, alpha, update_prev, momentum):
+    def update_SGD(self, eligibility, td_error, alpha, update_prev=0, momentum=0):
         """
         Updates the estimator parameters for a given state and action towards
         the target y.
@@ -211,22 +242,8 @@ class TileCodeEstimator():
         A[best_action] += (1.0 - epsilon)
         return A
 
-def PolicySampledExperience(env, value_estimator, policy_estimator, samples, policy_std=0):
-    
-    experience = deque()
-    
-    # Training data from sweep of random single steps
-    for ix in range(len(samples)):
-        env.reset()
-        env.env.state = samples[ix,:] # NOTE: We have a problem here if observation != state
-        mean_action = policy_estimator.predict(samples[ix,:], policy_estimator.weights) # DIFFERENT FEATURES
-        #action = np.random.normal(loc=mean_action, scale=policy_std)
-        observation, reward, done, info = env.step(mean_action)
-        experience.append((samples[ix,:], mean_action, reward, observation, done))
-    
-    return experience
 
-def PolicyRandomExperience(env, value_estimator, policy_estimator, samples, true_samples, policy_std=0):
+def PolicyExperience(env, policy_estimator, samples, true_samples, policy_std=0):
     
     experience = deque()
     
@@ -235,26 +252,22 @@ def PolicyRandomExperience(env, value_estimator, policy_estimator, samples, true
         env.reset()
         env.env.state = true_samples[ix,:]
         mean_action = policy_estimator.predict(samples[ix,:], policy_estimator.weights) # DIFFERENT FEATURES
-        #action = np.random.normal(loc=mean_action, scale=policy_std)
-        observation, reward, done, info = env.step(mean_action)
-        experience.append((samples[ix,:], mean_action, reward, observation, done))
+        action = np.random.normal(loc=mean_action, scale=policy_std)
+        observation, reward, done, info = env.step(action)
+        experience.append((samples[ix,:], action, reward, observation, done))
     
     return experience
 
-def SampledExperience(env, estimator, samplerange=10000):
+def RandomExperience(env, samples, true_samples):
 
-    experience = deque(maxlen=samplerange)
-    reward_end = 0
+    experience = deque()
 
-    samples = np.empty(shape=(samplerange, estimator.state_length))
-    for ix, (low, high) in enumerate(zip(env.observation_space.low,env.observation_space.high)):
-        samples[:,ix] = np.random.uniform(low=low, high=high, size=samplerange)
-    
     # Training data from sweep of random single steps
-    for ix in range(samplerange):
+    actions = np.random.uniform(low=env.action_space.low, high=env.action_space.high, size=len(samples))
+    for ix in range(len(samples)):
         env.reset()
-        env.env.state = samples[ix,:]
-        action = env.action_space.sample()
+        env.env.state = true_samples[ix,:]
+        action = [actions[ix]]
         observation, reward, done, info = env.step(action)
         experience.append((samples[ix,:], action, reward, observation, done))
 
@@ -354,8 +367,8 @@ def PlotValue(env, estimator, count=0):
         values = estimator.predict(state, estimator.weights)
         A[Idx] = np.argmax(values)
         Z[Idx] = values[A[Idx]]
-    Z = Z.reshape(X.shape)
-    A = A.reshape(X.shape)
+    Z = Z.reshape(X.shape).T
+    A = A.reshape(X.shape).T
 
     fig = plt.figure(figsize=(10,5))
     ax = fig.add_subplot(111, projection='3d')
@@ -373,13 +386,33 @@ def PlotValue(env, estimator, count=0):
     plt.savefig('Action'+str(count), orientation='landscape')
     plt.close(fig)
 
-def LSPI(env, estimator, discount_factor=0.99):
+def SampleGenerator(env, samplemethod, samplerange):
+    
+    env.reset()
+    true_state_length = len(env.env.state)
+    observable_state_length = env.observation_space.shape[0]
+
+    observed_samples = np.empty(shape=(samplerange, observable_state_length))
+    if samplemethod is 'PolicySampledExperience':
+        for ix, (low, high) in enumerate(zip(env.observation_space.low,env.observation_space.high)):
+            observed_samples[:,ix] = np.random.uniform(low=low, high=high, size=samplerange)
+        true_samples = observed_samples
+    elif samplemethod is 'PolicyRandomExperience':
+        true_samples = np.empty(shape=(samplerange, true_state_length))
+        for ix in range(samplerange):
+            observed_samples[ix,:] = env.reset()*sample_scalars
+            true_samples[ix,:] = env.env.state
+    
+    return observed_samples, true_samples
+
+def LSPI(env, estimator, discount_factor=0.99, dynamic_experience = False):
 
     reward_end = 0
     samplerange = 50000
     
-    dynamic_experience = False # Training data changes throughout
-    experience = SampledExperience(env, estimator, samplerange)
+     # Training data changes throughout
+    observed_samples, true_samples = SampleGenerator(env, samplemethod, samplerange)
+    experience = RandomExperience(env, estimator, samples, true_samples)
 
     for episode in range(100):
         
@@ -413,49 +446,91 @@ def LSPI(env, estimator, discount_factor=0.99):
                 #experience.append((observation, action, reward, observation_new))
                 1
 
-def D_AC_OffP_PG(env, policy_estimator, value_estimator, num_episodes):
+def D_AC_OffP_PG(env, policy_estimator, value_estimator, advantage_estimator, num_episodes, samplemethod, samplerange=1000000,
+    discount_factor=0.99, alpha_w=1e-3, alpha_v=1e-3, alpha_theta=1e-4, batch_size=1000, visual_updates=10, plot_updates=10):
     '''
     Deterministic Off Policy Actor Critic Policy Gradient
     '''
-    1
-    #for episode in range(num_episodes):
-        #while True:
-         #   1
+
+    #observed_samples, true_samples = SampleGenerator(env, samplemethod, samplerange)
+    #random_experience = RandomExperience(env, observed_samples, true_samples)
+
+    for episode in range(num_episodes):
+
+        if (episode%plot_updates == 0):
+            
+            if value_estimator.state_length == 2:
+                PlotValue(env, value_estimator, episode)
+                PlotAction(env, policy_estimator, episode)
+            else:
+                PlotPC(env, [value_estimator, policy_estimator], episode, sample_scalars, ['Value', 'Policy'])
+        
+        #random_ix = np.random.choice(len(random_experience), batch_size)
+        #sampled_experience = itemgetter(*random_ix)(random_experience)
+
+        observed_samples, true_samples = SampleGenerator(env, samplemethod, batch_size)
+        sampled_experience = PolicyExperience(env, policy_estimator, observed_samples, true_samples, policy_std=1)
+
+        with click.progressbar(range(len(sampled_experience))) as bar:
+            for idx in bar:
+                (observation, action, reward, observation_new, done) = sampled_experience[idx]
+                
+                policy_action = policy_estimator.predict(observation, policy_estimator.weights)
+                policy_feature, policy_feature_ix = policy_estimator.featurize_state(observation)
+
+                value = value_estimator.predict(observation, value_estimator.weights)
+                value_feature, _ = value_estimator.featurize_state(observation)
+                value_new = value_estimator.predict(observation_new, value_estimator.weights)
+
+                advantage_feature = advantage_estimator.featurize_state(observation, policy_feature, action, policy_action)
+                advantage = advantage_estimator.predict(advantage_feature, advantage_estimator.weights)
+
+                state_action_value = value + advantage
+                state_action_value_new = value_new # state_action_value_new is purely the value, as the action chosen is the policy
+                
+                if done:
+                    td_target = reward
+                else:
+                    td_target = reward + discount_factor * state_action_value_new
+
+                td_error = td_target - state_action_value
+                # Can speed this up for tile coding
+                # policy_error = np.inner(policy_feature.flatten(), advantage_estimator.weights.flatten())
+                policy_error = np.sum(advantage_estimator.weights[policy_feature_ix])
+                
+                advantage_estimator.update_SGD(advantage_feature, td_error, alpha_w)
+                value_estimator.update_SGD(value_feature, td_error, alpha_v)
+                policy_estimator.update_SGD(policy_feature, policy_error, alpha_theta)
+                
+        
+        rewards = 0
+        observation = env.reset()
+        while True:
+            if (episode%visual_updates == 0): env.render()
+            action = policy_estimator.predict(observation, policy_estimator.weights)
+            observation_new, reward, done, info = env.step(action)
+            rewards += reward
+            observation = observation_new
+            if done: 
+                print(str(episode) + ' - ' + str(rewards))
+                break
 
 def Stoc_AC_OnP_PG(env, policy_estimator, value_estimator, num_episodes, display=True,
         epsilon_decay=0.99, epsilon_initial=0.25, visual_updates=1, policy_std=10**-1,
         value_alpha=1e-3,  value_discount_factor=0.99,  value_llambda=0, value_momentum=0,
         policy_alpha=1e-3, policy_discount_factor=0.99, policy_llambda=0, policy_momentum=0,
         samplerange=5000, samplemethod='PolicySampledExperience', plot_updates=1, explore_off=10,
-        sample_scalars=1):
+        sample_scalars=1, dynamic_experience = False):
     '''
     Stochastic On Policy Actor Critic Policy Gradient
     '''
-    env.reset()
-    true_state_length = len(env.env.state)
 
-    samples = np.empty(shape=(samplerange, value_estimator.state_length))
-    if samplemethod is 'PolicySampledExperience':
-        for ix, (low, high) in enumerate(zip(env.observation_space.low,env.observation_space.high)):
-            samples[:,ix] = np.random.uniform(low=low, high=high, size=samplerange)
-    elif samplemethod is 'PolicyRandomExperience':
-        true_samples = np.empty(shape=(samplerange, true_state_length))
-        for ix in range(samplerange):
-            samples[ix,:] = env.reset()*sample_scalars
-            true_samples[ix,:] = env.env.state
-
-    dynamic_experience = False # Training data changes throughout
+    observed_samples, true_samples = SampleGenerator(env, samplemethod, samplerange)
     
     for episode in range(num_episodes):
-
-        if samplemethod is 'PolicySampledExperience':
-            experience = PolicySampledExperience(env, value_estimator, policy_estimator, 
-                samples, policy_std=policy_std)
-        elif samplemethod is 'PolicyRandomExperience':
-            experience = PolicyRandomExperience(env, value_estimator, policy_estimator, 
-                samples, true_samples, policy_std=policy_std)
-        else:
-            return
+   
+        experience = PolicyExperience(env, policy_estimator, 
+            samples, true_samples, policy_std=policy_std) 
 
         value_estimator.update_LSTD(env,
             experience, value_discount_factor, dynamic_experience=dynamic_experience)
@@ -481,17 +556,7 @@ def Stoc_AC_OnP_PG(env, policy_estimator, value_estimator, num_episodes, display
 
             if (episode%visual_updates == 0) & display: env.render()
 
-            policy_feature, _ = policy_estimator.featurize_state(observation)
-
-            mean_action = policy_estimator.predict(observation, policy_estimator.weights)
-            
-            if (episode%explore_off == 0) & episode>0:
-                action = mean_action
-            else:
-                action = np.random.normal(loc=mean_action, scale=policy_std)
-
-            policy_score = ((action-mean_action) * policy_feature / (policy_std**2)).flatten() # See DSilver notes
-
+            mean_action, action, policy_score = predict_Gaussian(observation, policy_estimator.weights, policy_std)
             observation_new, reward, done, info = env.step(action)
             rewards += reward
 

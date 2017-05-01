@@ -8,9 +8,9 @@ import sys
 sys.path.append(os.path.dirname(sys.path[0]))
 from lib import plotting
 from lib import EpsilonFunction
-from lib.RL_Library import TileCodeEstimator, Stoc_AC_OnP_PG
+from lib.RL_Library import TileCodeEstimator, D_AC_OffP_PG, AdvantageEstimator
 
-test = 'Pendulum-v0'
+test = 'MountainCarContinuous-v0'
 
 if test is "MountainCarContinuous-v0":
     method = "PolicySampledExperience"
@@ -55,13 +55,11 @@ env = gym.envs.make(test)
 weights = None
 policy_estimator = TileCodeEstimator(env, weights, state_labels, NLayers=policy_NLayers, NTiles=policy_NTiles)
 value_estimator = TileCodeEstimator(env, weights, state_labels, NLayers=value_NLayers, NTiles=value_NTiles)
+advantage_estimator = AdvantageEstimator(env, weights, policy_estimator.feature_length)
 
 num_episodes = 1000
-stats, value_estimator, policy_estimator = Stoc_AC_OnP_PG(
-    env, policy_estimator, value_estimator, num_episodes, display=True,
-    policy_alpha=policy_alpha, visual_updates=visual_updates, samplemethod=method,
-    policy_std=policy_std,samplerange=samplerange, plot_updates=plot_updates,
-    policy_llambda=policy_llambda, sample_scalars=sample_scalars)
+D_AC_OffP_PG(env, policy_estimator, value_estimator, advantage_estimator, num_episodes,
+    method, batch_size=10000, samplerange=1000000, alpha_w=1e-2, alpha_v=1e-2, alpha_theta=1e-3,visual_updates=250)
 
 # Policy alpha linked to STD!
 
