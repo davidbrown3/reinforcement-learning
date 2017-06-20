@@ -1,7 +1,6 @@
 import itertools
 import os
 import sys
-import matplotlib
 import gym
 import numpy as np
 import click
@@ -12,20 +11,11 @@ import pickle
 import math
 import tflearn
 
-import keras as kk
 import tensorflow as tf
-
-'''
-from keras.initializations import normal, identity
-from keras.models import model_from_json
-from keras.models import Sequential, Model
-from keras.engine.training import collect_trainable_weights
-from keras.layers import Dense, Flatten, Input, merge, Lambda
-from keras.optimizers import Adam
-'''
 
 from collections import deque
 from operator import itemgetter
+from timeit import default_timer as timer
 
 sys.path.append(os.path.dirname(sys.path[0]))
 from lib import plotting, EpsilonFunction
@@ -68,17 +58,13 @@ class NN_DDPG_Estimator():
 
         # DDPG Functions
         self.predicted_q_values = tf.placeholder(tf.float32, [None, 1])
-        self.critic_loss = tflearn.mean_square(self.predicted_q_values, self.critic_values)
+        self.critic_loss = tflearn.mean_square(self.predicted_q_values, self.critic_values) # Reduces to a single mean
         self.critic_optimize = tf.train.AdamOptimizer(self.critic_alpha).minimize(self.critic_loss)
         self.critic_action_gradients = tf.gradients(self.critic_values, self.critic_actions)
         self.critic_action_gradients_ph = tf.placeholder(tf.float32, [None, self.action_length])
         self.actor_gradients = tf.gradients(self.actor_actions, self.actor_network_params, -self.critic_action_gradients_ph)
         self.actor_optimize = tf.train.AdamOptimizer(self.actor_alpha).apply_gradients(
             zip(self.actor_gradients, self.actor_network_params))
-        
-        self.sess.run(tf.global_variables_initializer())
-
-        # Target Update
         self.update_critic_target_network_params = \
             [self.critic_target_network_params[i].assign(
                     tf.multiply(self.critic_network_params[i], self.tau) + 
@@ -89,7 +75,16 @@ class NN_DDPG_Estimator():
                     tf.multiply(self.actor_network_params[i], self.tau) + 
                     tf.multiply(self.actor_target_network_params[i], 1. - self.tau))
                 for i in range(self.N_actor)]
+        
+        self.saver = tf.train.Saver()
+        self.sess.run(tf.global_variables_initializer())
+        
+        self.save_model()
 
+    def save_model(self):
+        # Floydhub exclusively uses the 'output' directory to pass saved data back to user
+        os.makedirs('output', exist_ok=True)
+        self.saver.save(self.sess, 'output/tensorflow_weights.ckpt')
     def critic_gradients(self, states, actions):
         return self.sess.run(self.critic_action_gradients, feed_dict={
             self.critic_states: states,
@@ -119,16 +114,16 @@ class NN_DDPG_Estimator():
     def critic_create_network(self):
         inputs = tflearn.input_data(shape=[None, self.state_length])
         action = tflearn.input_data(shape=[None, self.action_length])
-        layer1 = tflearn.fully_connected(inputs, 400, activation='relu')
+        layer1 = tflearn.fully_connected(inputs, self.critic_NLayers[0], activation='relu')
         action_layer1 = tflearn.layers.merge_ops.merge([layer1, action],'concat')
-        layer2 = tflearn.fully_connected(action_layer1, 300, activation='relu')
+        layer2 = tflearn.fully_connected(action_layer1, self.critic_NLayers[1], activation='relu')
         outputs = tflearn.fully_connected(layer2, 1, 
             weights_init=tflearn.initializations.uniform(minval=-0.003, maxval=0.003))
         return inputs, action, outputs
     def actor_create_network(self):
         inputs = tflearn.input_data(shape=[None, self.state_length])
-        layer1 = tflearn.fully_connected(inputs, 400, activation='relu')
-        layer2 = tflearn.fully_connected(layer1, 300, activation='relu')
+        layer1 = tflearn.fully_connected(inputs, self.actor_NLayers[0], activation='relu')
+        layer2 = tflearn.fully_connected(layer1, self.actor_NLayers[1], activation='relu')
         outputs = tflearn.fully_connected(layer2, self.action_length, activation='tanh',
             weights_init=tflearn.initializations.uniform(minval=-0.003, maxval=0.003))
         scaled_outputs = tf.multiply(outputs, self.action_range)
@@ -525,7 +520,7 @@ def PlotAction(env, predict, count=0, plotrange = 50):
 
     Z = np.zeros(XY_combos.shape[0])
     for Idx, state in enumerate(XY_combos):
-        Z[Idx] = predict(state)
+        Z[Idx] = predict(state.reshape(1,-1))
     Z = Z.reshape(X.shape).T
 
     fig = plt.figure(figsize=(10,5))
@@ -588,7 +583,7 @@ def PlotValue(env, predict, count=0, plotrange = 50):
     Z = np.zeros(XY_combos.shape[0])
     A = np.zeros(XY_combos.shape[0], dtype=int)
     for Idx, state in enumerate(XY_combos):
-        values = predict(state)
+        values = predict(state.reshape(1,-1))
         A[Idx] = np.argmax(values)
         Z[Idx] = values[A[Idx]]
     Z = Z.reshape(X.shape).T
@@ -614,7 +609,7 @@ def TestPolicy(env, policy, b_render):
     rewards = 0
     observation = env.reset()
     while True:
-        env.render()
+        if b_render: env.render()
         action = policy(observation.reshape(1, -1))
         observation_new, reward, done, info = env.step(action)
         rewards += reward
@@ -684,17 +679,12 @@ def LSPI(env, estimator, discount_factor=0.99, dynamic_experience = False):
 
 def Deep_D_AC_OffP_PG(env, actor_critic, num_episodes, samplemethod,
     discount_factor=0.99, n_mini_batch=100, visual_updates=10, plot_updates=10,
-    observe_scalars=1, true_scalars=1, save_updates=25):
+    observe_scalars=1, true_scalars=1, save_updates=25, BRender=False):
     
     mini_batch = actor_critic.mini_batch
     for episode in range(num_episodes):
-
-        ''' TypeError, can't pickle _thread.lock objects
-        if (episode%save_updates == 0):
-            pickle.dump(actor_critic, open("savedactorcritic.txt", "wb" ) )
-        '''
    
-        if (episode%plot_updates == 0):
+        if (episode%plot_updates == 0) & (episode>0) & BRender:
             if env.observation_space.shape[0] == 2:
                 PlotValue(env, actor_critic.plot_policy_value, episode)
                 PlotAction(env, actor_critic.predict_actor, episode)
@@ -708,40 +698,71 @@ def Deep_D_AC_OffP_PG(env, actor_critic, num_episodes, samplemethod,
         batch_observed_samples = np.split(observed_samples, n_mini_batch)
         batch_true_samples = np.split(true_samples, n_mini_batch)
 
-        with click.progressbar(range(n_mini_batch)) as bar:
-            for idx in bar:
-                
-                sampled_experience = PolicyExperienceBatch(
-                    env, actor_critic.predict_actor, batch_observed_samples[idx], batch_true_samples[idx], policy_std=1)
+        #with click.progressbar(range(n_mini_batch)) as bar:
+        #for idx in bar:
+        t_samples = 0
+        t_predict = 0
+        t_temporal = 0
+        t_traincritic = 0
+        t_trainactor = 0
+        t_traintarget = 0
 
-                observations, actions, rewards, observations_new, dones = map(
-                    np.squeeze,(map(np.array,zip(*sampled_experience))))
-                
-                target_policy_actions_new = actor_critic.predict_target_actor(observations_new)
-                
-                values_new = actor_critic.predict_target_critic(observations_new, target_policy_actions_new)
+        for idx in range(n_mini_batch):
+            
+            start = timer()
 
-                undones = [not i for i in dones]
-                idx_dones = np.where(dones)[0]
-                idx_undones = np.where(undones)[0]
-                td_targets = np.zeros(mini_batch)
-                td_targets[idx_dones] = rewards[idx_dones].flatten()
-                td_targets[idx_undones] = rewards[idx_undones].flatten() + discount_factor * values_new.flatten()
-                
-                policy_actions = actor_critic.predict_actor(observations)
-                actor_critic.train_critic(observations, actions.reshape(-1, 1), td_targets.reshape(-1, 1))
-                critic_gradients = actor_critic.critic_gradients(observations, policy_actions)[0]
-                actor_critic.train_actor(observations, critic_gradients)
-                actor_critic.train_target()
-        
-        if (episode%visual_updates == 0): b_render = True
+            sampled_experience = PolicyExperienceBatch(
+                env, actor_critic.predict_actor, batch_observed_samples[idx], batch_true_samples[idx], policy_std=1)     
+            observations, actions, rewards, observations_new, dones = map(
+                np.squeeze,(map(np.array,zip(*sampled_experience))))
+            end = timer()
+            t_samples += end-start
+            start = end
+
+            target_policy_actions_new = actor_critic.predict_target_actor(observations_new)
+            policy_actions = actor_critic.predict_actor(observations)
+            values_new = actor_critic.predict_target_critic(observations_new, target_policy_actions_new)
+            end = timer()
+            t_predict += end-start
+            start = end
+
+            undones = [not i for i in dones]
+            idx_dones = np.where(dones)[0]
+            idx_undones = np.where(undones)[0]
+            td_targets = np.zeros(mini_batch)
+            td_targets[idx_dones] = rewards[idx_dones].flatten()
+            td_targets[idx_undones] = rewards[idx_undones].flatten() + discount_factor * values_new[idx_undones].flatten()
+            end = timer()
+            t_temporal += end-start
+            start = end
+            
+            actor_critic.train_critic(observations, actions.reshape(-1, 1), td_targets.reshape(-1, 1))
+            end = timer()
+            t_traincritic += end-start
+            start = end
+
+            critic_gradients = actor_critic.critic_gradients(observations, policy_actions)[0]
+            actor_critic.train_actor(observations, critic_gradients)
+            end = timer()
+            t_trainactor += end-start
+            start = end
+
+            actor_critic.train_target()
+            end = timer()
+            t_traintarget += end-start
+
+        times = [t_samples, t_predict, t_temporal, t_traincritic, t_trainactor, t_traintarget]
+        print('Samples, Predict, TD, Critic, Actor, Targets')
+        print(["%.4f" % (i/n_mini_batch) for i in times])
+
+        if (episode%visual_updates == 0) & BRender: b_render = True
         else: b_render = False
         rewards = TestPolicy(env, actor_critic.predict_actor, b_render)
         print('  ' + str(episode) + ' - ' + str(rewards))
 
 def Deep_D_AC_OffP_PG_exp(env, actor_critic, num_episodes,
     discount_factor=0.99, visual_updates=10, plot_updates=10, save_updates=25,
-    observe_scalars=1, true_scalars=1, random_updates=10):
+    observe_scalars=1, true_scalars=1, random_updates=10, BRender=False):
     
     actor_critic.train_target()
 
@@ -751,7 +772,7 @@ def Deep_D_AC_OffP_PG_exp(env, actor_critic, num_episodes,
     with click.progressbar(range(num_episodes)) as bar:
         for episode in bar:
 
-            if (episode%plot_updates == 0):
+            if (episode%plot_updates == 0) & (episode>0):
                 if env.observation_space.shape[0] == 2:
                     PlotValue(env, actor_critic.plot_policy_value, episode)
                     PlotAction(env, actor_critic.predict_actor, episode)
@@ -759,12 +780,11 @@ def Deep_D_AC_OffP_PG_exp(env, actor_critic, num_episodes,
                     PlotPC(env, [actor_critic.plot_policy_value, actor_critic.predict_actor],
                          actor_critic.state_labels, episode, observe_scalars, ['Value', 'Policy'])
         
-            #observation = env.reset().reshape(-1,1)
             observation = env.reset().reshape(1, -1)
             reward_tracker = 0
             while True:
 
-                if (episode%visual_updates)==0: env.render()
+                if (episode%visual_updates)==0 & BRender: env.render()
                 '''
                 action_mean = actor_critic.predict_actor(observation)
                 if (episode%random_updates)==0: action = action_mean

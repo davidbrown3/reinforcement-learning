@@ -10,17 +10,18 @@ from lib import plotting
 from lib import EpsilonFunction
 from lib.RL_Library import TileCodeEstimator, Stoc_AC_OnP_PG
 
-test = 'Pendulum-v0'
+test = 'MountainCarContinuous-v0'
 
 if test is "MountainCarContinuous-v0":
     method = "PolicySampledExperience"
     state_labels = ['x', 'x_dot']
-    policy_alpha = 2.5e-3
-    policy_std = 5*10**-1
+    policy_alpha = 1e-3
+    policy_std = 1*10**-1
     samplerange = 5000
     visual_updates = 25
     plot_updates = 25
     policy_llambda = 0
+    sample_scalars = 1
     policy_NLayers = 5
     policy_NTiles = 10
     value_NLayers = 5
@@ -57,7 +58,7 @@ policy_estimator = TileCodeEstimator(env, weights, state_labels, NLayers=policy_
 value_estimator = TileCodeEstimator(env, weights, state_labels, NLayers=value_NLayers, NTiles=value_NTiles)
 
 num_episodes = 1000
-stats, value_estimator, policy_estimator = Stoc_AC_OnP_PG(
+value_estimator, policy_estimator = Stoc_AC_OnP_PG(
     env, policy_estimator, value_estimator, num_episodes, display=True,
     policy_alpha=policy_alpha, visual_updates=visual_updates, samplemethod=method,
     policy_std=policy_std,samplerange=samplerange, plot_updates=plot_updates,

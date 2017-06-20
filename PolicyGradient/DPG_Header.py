@@ -10,37 +10,39 @@ from lib import plotting
 from lib import EpsilonFunction
 from lib.RL_Library import TileCodeEstimator, D_AC_OffP_PG, AdvantageEstimator
 
-test = 'MountainCarContinuous-v0'
+visual_updates = 25
+plot_updates = 50
+policy_std = 5*10**-1
+
+test = 'Pendulum-v0'
 
 if test is "MountainCarContinuous-v0":
     method = "PolicySampledExperience"
     state_labels = ['x', 'x_dot']
-    policy_alpha = 2.5e-3
-    policy_std = 5*10**-1
-    samplerange = 5000
-    visual_updates = 25
-    plot_updates = 25
+    observe_scalars = 1
+    true_scalars = 1
     policy_llambda = 0
     policy_NLayers = 5
     policy_NTiles = 10
     value_NLayers = 5
     value_NTiles = 10
+    alpha_w = 1e-2 
+    alpha_v = 1e-2
+    alpha_theta = 1e-3
     # Higher number of tile layers seems very beneficial!
 
 elif test is "Pendulum-v0":
     method = "PolicyRandomExperience"
     state_labels = ['cos(θ)', 'sin(θ)', 'θ_dot']
-    policy_alpha = 1e-2
-    policy_std = 10*10**-1
-    samplerange = 20000
-    plot_updates = 25
-    visual_updates = 25
-    policy_llambda = 0
-    sample_scalars = [1, 1, 8]
+    observe_scalars = [1, 1, 8]
+    true_scalars = [1, 8]
     policy_NLayers = 5
     policy_NTiles = 10
     value_NLayers = 5
     value_NTiles = 10
+    alpha_w = 1e-3 
+    alpha_v = 1e-3
+    alpha_theta = 1e-4
 
 '''
 1) Increase corseness of value model with time?
@@ -58,10 +60,12 @@ value_estimator = TileCodeEstimator(env, weights, state_labels, NLayers=value_NL
 advantage_estimator = AdvantageEstimator(env, weights, policy_estimator.feature_length)
 
 num_episodes = 1000
-D_AC_OffP_PG(env, policy_estimator, value_estimator, advantage_estimator, num_episodes,
-    method, batch_size=10000, samplerange=1000000, alpha_w=1e-2, alpha_v=1e-2, alpha_theta=1e-3,visual_updates=250)
+policy_estimator, value_estimator, advantage_estimator = D_AC_OffP_PG(env, policy_estimator, value_estimator, 
+    advantage_estimator, num_episodes, method, batch_size=10000, samplerange=1000000, alpha_w=alpha_w, alpha_v=alpha_v,
+     alpha_theta=alpha_theta, visual_updates=visual_updates, observe_scalars=observe_scalars, true_scalars=true_scalars,
+     plot_updates=plot_updates)
 
 # Policy alpha linked to STD!
-
-pickle.dump(value_estimator, open( "savedvaluemodel.txt", "wb" ) )
-pickle.dump(policy_estimator, open( "savedpolicymodel.txt", "wb" ) )
+pickle.dump(advantage_estimator, open( test + "savedadvantagemodel.txt", "wb" ) )
+pickle.dump(value_estimator, open( test + "savedvaluemodel.txt", "wb" ) )
+pickle.dump(policy_estimator, open( test + "savedpolicymodel.txt", "wb" ) )

@@ -12,9 +12,11 @@ from lib import EpsilonFunction
 from lib.RL_Library import NN_DDPG_Estimator, Deep_D_AC_OffP_PG, Deep_D_AC_OffP_PG_exp
 
 visual_updates = 10
-mini_batch = 64
+BRender = False
 
-test = 'Pendulum-v0'
+mini_batch = 1024
+
+test = 'MountainCarContinuous-v0'
 
 if test is "MountainCarContinuous-v0":
     method = "PolicySampledExperience"
@@ -32,17 +34,26 @@ elif test is "Pendulum-v0":
     actor_alpha = 0.0001
     critic_alpha = 0.001
 
-sess = tf.Session()
+debugGPU = True
+sess = tf.Session(config=tf.ConfigProto(log_device_placement=debugGPU))
+
 env = gym.envs.make(test)
 
 algorithm = 1
 
 '''
 Can we use an expected reward range?
+
+Can the regular and target model have same initial weights?
+
+Turn rendering off for Floydhub
+
+Apply batch manually
+
 '''
 
 weights = None
-num_episodes = 10000
+num_episodes = 1
 
 if algorithm==1:
     n_mini_batch = 1000
@@ -55,7 +66,8 @@ if algorithm==1:
 
     Deep_D_AC_OffP_PG(env, actor_critic, num_episodes, method,
                                     plot_updates=plot_updates, visual_updates=visual_updates,
-                                    observe_scalars=observe_scalars, true_scalars=true_scalars)
+                                    observe_scalars=observe_scalars, true_scalars=true_scalars,
+                                    BRender=BRender)
 
 elif algorithm == 2:
 
@@ -67,7 +79,8 @@ elif algorithm == 2:
 
     Deep_D_AC_OffP_PG_exp(env, actor_critic, num_episodes,
                           visual_updates=visual_updates, plot_updates=plot_updates,
-                          observe_scalars=observe_scalars, true_scalars=true_scalars)
+                          observe_scalars=observe_scalars, true_scalars=true_scalars,
+                          BRender=BRender)
 
 
 '''
